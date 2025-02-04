@@ -1,14 +1,90 @@
-version: '3'
-
 services:
-  db:
+  postgres:
     image: postgres:12
     environment:
-      POSTGRES_DB: northwind
-      POSTGRES_USER: northwind_user
-      POSTGRES_PASSWORD: thewindisblowing
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
     volumes:
       - ./dbdata:/var/lib/postgresql/data
-      - ./data/northwind.sql:/docker-entrypoint-initdb.d/northwind.sql
+      - ./data/northwind.sql:/docker-entrypoint-initdb.d/northwind.sql  # Inicialização do banco principal
     ports:
-      - 5432:5432
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-second:
+    image: postgres:12
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow_second  # Novo banco de dados, vazio no início
+    volumes:
+      - ./dbdata_second:/var/lib/postgresql/data  # Sem arquivos de inicialização
+    ports:
+      - "5433:5432"  # Porta diferente
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow-webserver:
+    image: apache/airflow:2.5.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-second:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN_SECOND: postgresql+psycopg2://airflow:airflow@postgres-second/airflow_second  # Conexão com o segundo banco de dados
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      AIRFLOW__CORE__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__WEBSERVER__SECRET_KEY: "244466666688888888"
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "airflow db upgrade && \
+               airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com && \
+               airflow webserver"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+
+  airflow-scheduler:
+    image: apache/airflow:2.5.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-second:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN_SECOND: postgresql+psycopg2://airflow:airflow@postgres-second/airflow_second  # Conexão com o segundo banco de dados
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'False'
+      AIRFLOW__CORE__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__WEBSERVER__SECRET_KEY: "244466666688888888"
+    command: scheduler
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+
+  airflow-init:
+    image: apache/airflow:2.5.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-second:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN_SECOND: postgresql+psycopg2://airflow:airflow@postgres-second/airflow_second  # Conexão com o segundo banco de dados
+    command: "bash -c 'airflow db init'"
